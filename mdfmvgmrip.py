@@ -5,6 +5,7 @@ import warnings
 import os
 import pathlib
 import sys
+import json
 
 from vgm import VGM, VGMError
 from ym2612 import YM2612, YM2612Error, YM2612Instrument
@@ -13,7 +14,10 @@ from ym2612 import YM2612, YM2612Error, YM2612Instrument
 DEBUG : bool = "--debug" in sys.argv
 
 def dump_datablocks(data: dict, out_dir: str) -> None:
-  pathlib.Path(out_dir).mkdir(parents=True, exist_ok=True)
+  try:
+    pathlib.Path(out_dir).mkdir(parents=True, exist_ok=True)
+  except Exception as e:
+    raise IOError(f"Unable to create FM instrument output folder: {e}")
 
   sections : list[bytes] = []
 
@@ -25,38 +29,96 @@ def dump_datablocks(data: dict, out_dir: str) -> None:
     with open(os.path.join(out_dir, f"DATABLK{i}.bin"), "wb") as f:
       f.write(section)
   
-  print(f"Saved data blocks to {out_dir}")
+  print(f"Saved all data blocks to {out_dir} :3")
 
 
-def dump_fm_instruments(commands: list[dict[str, Any]]) -> None:
+def dump_fm_instruments(commands: list[dict[str, Any]], out_dir: str) -> None:
   ym : YM2612 = YM2612()
   
   NO_CHANGE : list[str] = ["n" for _ in range(6)]
 
   instruments : list[YM2612Instrument] = []
   i : int = 0
+  c : int = 0
   for cmd in commands:
-    result : dict[str, Any] = ym.handle_command(cmd)
+    if cmd["cmd"] == "ym_write":
+      result : dict[str, Any] = ym.handle_write_command(cmd)
 
-    if result["notes"] != NO_CHANGE:
-      if DEBUG:
-        print(result["notes"])
-      for channel in range(6):
-        if result["notes"][channel] == "d":
-          inst : YM2612Instrument = YM2612Instrument.from_channel(ym.channels[channel], ym.lfo_freq)
-          is_in_list : bool = False
-          for inst2 in instruments:
-            if YM2612Instrument.compare(inst, inst2):
-              is_in_list = True
-              break
-          
-          if not is_in_list:
-            instruments.append(inst)
-    
-    i += result["advance"]
+      if result["notes"] != NO_CHANGE:
+        if DEBUG:
+          print(result["notes"])
+        for channel in range(6):
+          if result["notes"][channel] == "d":
+            inst : YM2612Instrument = YM2612Instrument.from_channel(ym.channels[channel], ym.lfo_freq)
+            idx : int = -1
+            j : int = 0
+            for inst2 in instruments:
+              if YM2612Instrument.compare(inst, inst2):
+                idx = j
+                break
+              j += 1
 
-  print(instruments)
-  print(len(instruments))
+            if idx == -1:
+              key_on_ops : dict[str, bool] | None = None
+
+              if cmd["cmd"] == "ym_write":
+                if cmd["reg"] == 0x28:
+                  key_on_ops = {
+                    "0": cmd["val"] & 0x80 == 0x80,
+                    "1": cmd["val"] & 0x40 == 0x40,
+                    "2": cmd["val"] & 0x20 == 0x20,
+                    "3": cmd["val"] & 0x10 == 0x10,
+                  }
+
+              inst.metadata = {
+                "all_uses": [
+                  {
+                    "at_command": c,
+                    "at_sample": i,
+                    "key_on_ops": key_on_ops
+                  }
+                ]
+              }
+              instruments.append(inst)
+            else:
+              key_on_ops : dict[str, bool] | None = None
+
+              if cmd["cmd"] == "ym_write":
+                if cmd["reg"] == 0x28:
+                  key_on_ops = {
+                    "0": cmd["val"] & 0x80 == 0x80,
+                    "1": cmd["val"] & 0x40 == 0x40,
+                    "2": cmd["val"] & 0x20 == 0x20,
+                    "3": cmd["val"] & 0x10 == 0x10,
+                  }
+
+              instruments[idx].metadata["all_uses"].append(
+                {
+                  "at_command": c,
+                  "at_sample": i,
+                  "key_on_ops": key_on_ops
+                }
+              )
+              
+
+      i += result["advance"]
+      c += 1
+
+  print(f"Found {len(instruments)} unique used FM instruments")
+
+  try:
+    pathlib.Path(out_dir).mkdir(parents=True, exist_ok=True)
+  except Exception as e:
+    raise IOError(f"Unable to create FM instrument output folder: {e}")
+
+  i : int = -1
+  for inst in instruments:
+    i += 1
+    with open(os.path.join(out_dir, f"INST{i}.json"), "w", encoding="utf-8") as f:
+      json.dump(inst.serialize(), f, indent="\t")
+  
+  print(f"Saved all FM instruments as JSON files to {out_dir} :3")
+
 
 
 def main():
@@ -110,13 +172,15 @@ def main():
         exit(1)
     
     if args.fm_inst_out:
-      dump_fm_instruments(vgm.commands)
+      dump_fm_instruments(vgm.commands, args.fm_inst_out)
   except VGMError as e:
     argparser.error(f"Error parsing VGM file: {e.info}")
     exit(1)
   except YM2612Error as e:
     argparser.error(f"YM2612 error occured: {e.info}")
     exit(1)
+  except IOError as e:
+    argparser.error(f"Unable to create file/folder: {e}")
 
 if __name__ == "__main__":
   main()
