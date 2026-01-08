@@ -53,7 +53,7 @@ class VGM:
       warnings.warn("SEGA PSG (TI SN76489) is not used in this file")
 
     if ym2612_clock == 0 and psg_clock == 0:
-      raise VGMError("Not a Sega MegaDrive/Genesis (PSG&YM2612 are not used)")
+      raise VGMError("Not a Sega MegaDrive/Genesis .VGM (PSG&YM2612 are not used)")
     
     data_offset : int = 0x0C
     if vgm.version >= 0x00000150:

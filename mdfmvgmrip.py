@@ -4,10 +4,13 @@ from typing import Any
 import warnings
 import os
 import pathlib
+import sys
 
 from vgm import VGM, VGMError
-from ym2612 import YM2612, YM2612Error
+from ym2612 import YM2612, YM2612Error, YM2612Instrument
 
+
+DEBUG : bool = "--debug" in sys.argv
 
 def dump_datablocks(data: dict, out_dir: str) -> None:
   pathlib.Path(out_dir).mkdir(parents=True, exist_ok=True)
@@ -28,8 +31,32 @@ def dump_datablocks(data: dict, out_dir: str) -> None:
 def dump_fm_instruments(commands: list[dict[str, Any]]) -> None:
   ym : YM2612 = YM2612()
   
+  NO_CHANGE : list[str] = ["n" for _ in range(6)]
+
+  instruments : list[YM2612Instrument] = []
+  i : int = 0
   for cmd in commands:
-    ym.handle_command(cmd)
+    result : dict[str, Any] = ym.handle_command(cmd)
+
+    if result["notes"] != NO_CHANGE:
+      if DEBUG:
+        print(result["notes"])
+      for channel in range(6):
+        if result["notes"][channel] == "d":
+          inst : YM2612Instrument = YM2612Instrument.from_channel(ym.channels[channel], ym.lfo_freq)
+          is_in_list : bool = False
+          for inst2 in instruments:
+            if YM2612Instrument.compare(inst, inst2):
+              is_in_list = True
+              break
+          
+          if not is_in_list:
+            instruments.append(inst)
+    
+    i += result["advance"]
+
+  print(instruments)
+  print(len(instruments))
 
 
 def main():
