@@ -13,9 +13,10 @@ def get_channel_number_from_keyonoff_bits(chn: int) -> int: # WHY, YAMAHA.
     0b010: 2,
     0b100: 3,
     0b101: 4,
-    0b110: 5
+    0b110: 5,
+    0b111: 6 # used for DAC writes in some VGMs?
   }
-  
+
   try:
     return LOOKUP[chn]
   except KeyError:
@@ -37,7 +38,7 @@ def get_channel_number_and_high_from_freq_reg(reg: int) -> tuple[int, bool | Non
     0xAD: (4, True),
     0xAE: (5, True)
   }
-  
+
   try:
     return LOOKUP[reg]
   except KeyError:
@@ -48,11 +49,11 @@ def get_channel_and_operator_number_from_reg(port: int, reg: int) -> tuple[int, 
     0x00: (0, 0),
     0x01: (1, 0),
     0x02: (2, 0),
-    
+
     0x04: (0, 1),
     0x05: (1, 1),
     0x06: (2, 1),
-    
+
     0x08: (0, 2),
     0x09: (1, 2),
     0x0A: (2, 2),
@@ -61,7 +62,7 @@ def get_channel_and_operator_number_from_reg(port: int, reg: int) -> tuple[int, 
     0x0D: (1, 3),
     0x0E: (2, 3)
   }
-  
+
   while reg >= 0x10:
     reg -= 0x10
 
@@ -70,7 +71,7 @@ def get_channel_and_operator_number_from_reg(port: int, reg: int) -> tuple[int, 
     return (o[0] + (3 * port), o[1])
   except KeyError:
     return (-1, -1)
-  
+
 
 
 class YM2612Error(Exception):
@@ -90,10 +91,10 @@ class YM2612Operator:
     self.key_scaling : int = 0
     self.amplitude_mod : bool = False
     self.ssg_eg : int = 0
-    
+
     self.ch3_spmode_freq : int = 0
     self.ch3_spmode_octave : int = 0
-    
+
     self.attack : int = 0
     self.delay : int = 0
     self.sustain : int = 0
@@ -169,7 +170,7 @@ class YM2612Instrument:
       if not YM2612Operator.compare(a.operators[i], b.operators[i]):
         ops_are_equal = False
         break
-    
+
     return a.algorithm == b.algorithm and \
     a.lfo_freq == b.lfo_freq and \
     a.op1_feedback == b.op1_feedback and \
@@ -191,7 +192,7 @@ class YM2612Instrument:
     inst.lfo_freq = lfo_freq
 
     return inst
-  
+
   def serialize(self) -> dict[str, Any]:
     serialized_ops : list[dict[str, Any]] = []
     for operator in self.operators:
@@ -215,6 +216,7 @@ class YM2612:
     self.channels : list[YM2612Channel] = [YM2612Channel() for _ in range(6)]
     self.lfo_freq : int = -1 # -1 = disabled
     self.dac_enable : bool = False
+    self.dac : int = 0
 
   def handle_write_command(self, cmd: dict[str, Any]) -> dict[str, Any]:
     advance : int = 1
@@ -225,23 +227,26 @@ class YM2612:
       operators : int = (cmd["val"] & 0xF0) >> 4
       key_on : bool = operators != 0
 
+      if channel == 6:
+        return {"advance": advance, "notes": notes}
+
       prev_key_on = self.channels[channel].key_on
       if prev_key_on != key_on:
         notes[channel] = "d" if key_on else "u"
-      
+
       self.channels[channel].key_on = key_on
 
       if DEBUG:
         print(f"YM2612: Key On/Off: Ch={channel} Ops={bin(operators)} S={"Down" if key_on else "Up"}")
 
-      if channel > 5:
+      if channel > 6:
         raise YM2612Error(f"Invalid channel for command 0x28 (key on/off): {channel} ({bin(channel - 1)})")
     elif cmd["reg"] == 0x22: # LFO control
       if cmd["val"] & 0x08 == 0x08:
         self.lfo_freq = cmd["val"] & 0x07
       else:
         self.lfo_freq = -1
-      
+
       if DEBUG:
         print(f"YM2612: LFO Control - Freq={self.lfo_freq} ({"off" if self.lfo_freq == -1 else "on"})")
     elif cmd["reg"] == 0x27: # Timer Control (+ch3)
@@ -258,7 +263,7 @@ class YM2612:
         print(f"YM2612: Timer register write (unimplemented): P={cmd["port"]} R={cmd["reg"]} V={cmd["val"]} ({bin(cmd["val"])})")
     elif cmd["reg"] == 0x2B: # DAC Enable
       self.dac_enable = cmd["val"] & 0x80 == 0x80
-      
+
       if DEBUG:
         print(f"YM2612: DAC Enable: DA={self.dac_enable}")
     elif cmd["reg"] == 0x2A: # DAC Value
@@ -269,7 +274,8 @@ class YM2612:
     elif 0x30 <= cmd["reg"] <= 0x3F: # OP: Detune and multiplier
       channel, operator = get_channel_and_operator_number_from_reg(cmd["port"], cmd["reg"])
       if channel == -1:
-        raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
+        #raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
+        return {"advance": advance, "notes": notes}
       if DEBUG:
         print(f"YM2612: Ch{channel+1} OP{operator+1} - Detune and Multiplier: Dtn={(cmd["val"] & 0b01110000) >> 4} Mul={cmd["val"] & 0xF}")
       self.channels[channel].operators[operator].detune = (cmd["val"] & 0b01110000) >> 4
@@ -277,14 +283,16 @@ class YM2612:
     elif 0x40 <= cmd["reg"] <= 0x4F: # OP: Total level
       channel, operator = get_channel_and_operator_number_from_reg(cmd["port"], cmd["reg"])
       if channel == -1:
-        raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
+        #raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
+        return {"advance": advance, "notes": notes}
       self.channels[channel].operators[operator].level = cmd["val"] & 0x7F
       if DEBUG:
         print(f"YM2612: Ch{channel+1} OP{operator+1} - Total level: TL={cmd["val"] & 0x40}")
     elif 0x50 <= cmd["reg"] <= 0x5F: # OP: Rate scaling and attack rate
       channel, operator = get_channel_and_operator_number_from_reg(cmd["port"], cmd["reg"])
       if channel == -1:
-        raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
+        #raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
+        return {"advance": advance, "notes": notes}
       self.channels[channel].operators[operator].key_scaling = (cmd["val"] & 0xC0) >> 6
       self.channels[channel].operators[operator].attack = cmd["val"] & 0x1F
       if DEBUG:
@@ -292,7 +300,8 @@ class YM2612:
     elif 0x60 <= cmd["reg"] <= 0x6F: # OP: Decay 1 and AM
       channel, operator = get_channel_and_operator_number_from_reg(cmd["port"], cmd["reg"])
       if channel == -1:
-        raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
+        #raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
+        return {"advance": advance, "notes": notes}
       self.channels[channel].operators[operator].amplitude_mod = cmd["val"] & 0x80 == 0x80
       self.channels[channel].operators[operator].delay = cmd["val"] & 0x1F
       if DEBUG:
@@ -303,11 +312,12 @@ class YM2612:
         raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
       self.channels[channel].operators[operator].sustain = cmd["val"] & 0x1F
       if DEBUG:
-        print(f"YM2612: Ch{channel+1} OP{operator+1} - Sustain: S={cmd["val"] & 0x1F}")   
+        print(f"YM2612: Ch{channel+1} OP{operator+1} - Sustain: S={cmd["val"] & 0x1F}")
     elif 0x80 <= cmd["reg"] <= 0x8F: # OP: Sustain level and release
       channel, operator = get_channel_and_operator_number_from_reg(cmd["port"], cmd["reg"])
       if channel == -1:
-        raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
+        #raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
+        return {"advance": advance, "notes": notes}
       self.channels[channel].operators[operator].sust_lvl = ((cmd["val"] & 0xF0) >> 4) | 0x10
       self.channels[channel].operators[operator].release = (cmd["val"] & 0xF) | 0x10
       if DEBUG:
@@ -315,7 +325,8 @@ class YM2612:
     elif 0x90 <= cmd["reg"] <= 0x9F: # OP: SSG Envelope Generation (SSG-EG)
       channel, operator = get_channel_and_operator_number_from_reg(cmd["port"], cmd["reg"])
       if channel == -1:
-        raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
+        #raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
+        return {"advance": advance, "notes": notes}
       self.channels[channel].operators[operator].ssg_eg = cmd["val"] & 0xF
       if DEBUG:
         print(f"YM2612: Ch{channel+1} OP{operator+1} - SSG-EG (envelope gen.): SSG-EG={cmd["val"] & 0xF} ({bin(cmd["val"] & 0xF)})")
