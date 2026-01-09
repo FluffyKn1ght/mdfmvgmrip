@@ -76,7 +76,7 @@ class VGM:
         self.version: int = -1
         self.commands: list[VGMCommand] = []
         self.gd3_tag: dict[str, str] | None = None
-        self.dblock_data: bytes = b""
+        self.dblock_data: dict[int, bytes] = {}
         self.dblock_sections: list[DataBlockSection] = []
 
         self.sega_psg_clock: int = 0
@@ -129,7 +129,10 @@ class VGM:
                         len(vgm.dblock_data) + len(data_block["data"]),
                     )
                 )
-                vgm.dblock_data += data_block["data"]
+                if data_block["type"] in vgm.dblock_data.keys():
+                    vgm.dblock_data[data_block["type"]] += data_block["data"]
+                else:
+                    vgm.dblock_data[data_block["type"]] = data_block["data"]
                 i += 2 + 4 + len(data_block["data"])
             elif cmd == 0x68:  # pcm ram write (stub)
                 raise VGMError(f"At byte {i}: PCM RAM write (unimplemented)")
