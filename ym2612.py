@@ -378,7 +378,7 @@ class YM2612:
         print(f"YM2612: Ch{channel+1} - Feedback & algorithm: FB={(cmd["val"] >> 3) & 0x07} AL={cmd["val"] & 0x07}")
     elif 0xB4 <= cmd["reg"] <= 0xB6: # Ch: Stereo and LFO sensitivity
       channel : int = cmd["reg"] - 0xB4 + (3 * cmd["port"])
-      self.channels[channel].pan = (cmd["val"] >> 6) & 0x02
+      self.channels[channel].pan = (cmd["val"] >> 6) & 0x03
       self.channels[channel].ams = (cmd["val"] >> 3) & 0x07
       self.channels[channel].fms = cmd["val"] & 0x02
       if DEBUG:
