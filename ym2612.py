@@ -2,6 +2,7 @@ from typing import Any
 import sys
 import warnings
 import copy
+from vgm import WriteCommand
 
 DEBUG: bool = "--debug" in sys.argv
 
@@ -210,6 +211,12 @@ class YM2612Instrument:
         }
 
 
+class YM2612State:
+    def __init__(self, advance: int = 1, *args, notes: list[str] | None = None) -> None:
+        self.advance: int = advance
+        self.notes: list[str] = notes if notes else ["n" for _ in range(6)]
+
+
 class YM2612:
     def __init__(self) -> None:
         self.channels: list[YM2612Channel] = [YM2612Channel() for _ in range(6)]
@@ -217,17 +224,17 @@ class YM2612:
         self.dac_enable: bool = False
         self.dac: int = 0
 
-    def handle_write_command(self, cmd: dict[str, Any]) -> dict[str, Any]:
+    def handle_write_command(self, cmd: WriteCommand) -> YM2612State:
         advance: int = 1
         notes: list[str] = ["n" for _ in range(6)]
 
-        if cmd["reg"] == 0x28:  # Key on/off
-            channel: int = get_channel_number_from_keyonoff_bits(cmd["val"] & 0x07)
-            operators: int = (cmd["val"] & 0xF0) >> 4
+        if cmd.register == 0x28:  # Key on/off
+            channel: int = get_channel_number_from_keyonoff_bits(cmd.value & 0x07)
+            operators: int = (cmd.value & 0xF0) >> 4
             key_on: bool = operators != 0
 
             if channel == 6:
-                return {"advance": advance, "notes": notes}
+                return YM2612State()
 
             prev_key_on = self.channels[channel].key_on
             if prev_key_on != key_on:
@@ -244,9 +251,9 @@ class YM2612:
                 raise YM2612Error(
                     f"Invalid channel for command 0x28 (key on/off): {channel} ({bin(channel - 1)})"
                 )
-        elif cmd["reg"] == 0x22:  # LFO control
-            if cmd["val"] & 0x08 == 0x08:
-                self.lfo_freq = cmd["val"] & 0x07
+        elif cmd.register == 0x22:  # LFO control
+            if cmd.value & 0x08 == 0x08:
+                self.lfo_freq = cmd.value & 0x07
             else:
                 self.lfo_freq = -1
 
@@ -254,222 +261,224 @@ class YM2612:
                 print(
                     f"YM2612: LFO Control - Freq={self.lfo_freq} ({"off" if self.lfo_freq == -1 else "on"})"
                 )
-        elif cmd["reg"] == 0x27:  # Timer Control (+ch3)
-            self.channels[2].ch3_special_mode = cmd["val"] & 0xC0 == 0x40
+        elif cmd.register == 0x27:  # Timer Control (+ch3)
+            self.channels[2].ch3_special_mode = cmd.value & 0xC0 == 0x40
             if self.channels[2].ch3_special_mode:
                 warnings.warn("Channel 3 is in special mode")
                 if DEBUG:
                     exit()
             if DEBUG:
                 print(
-                    f"YM2612: Timer/Ch3 SpMode Control: Ch3SpMode={self.channels[2].ch3_special_mode} ({bin(cmd["val"])})"
+                    f"YM2612: Timer/Ch3 SpMode Control: Ch3SpMode={self.channels[2].ch3_special_mode} ({bin(cmd.value)})"
                 )
-        elif 0x24 <= cmd["reg"] <= 0x26:  # Timer A/B
+        elif 0x24 <= cmd.register <= 0x26:  # Timer A/B
             # we DO NOT care :3
             if DEBUG:
                 print(
-                    f"YM2612: Timer register write (unimplemented): P={cmd["port"]} R={cmd["reg"]} V={cmd["val"]} ({bin(cmd["val"])})"
+                    f"YM2612: Timer register write (unimplemented): P={cmd.port} R={cmd.register} V={cmd.value} ({bin(cmd.value)})"
                 )
-        elif cmd["reg"] == 0x2B:  # DAC Enable
-            self.dac_enable = cmd["val"] & 0x80 == 0x80
+        elif cmd.register == 0x2B:  # DAC Enable
+            self.dac_enable = cmd.value & 0x80 == 0x80
 
             if DEBUG:
                 print(f"YM2612: DAC Enable: DA={self.dac_enable}")
-        elif cmd["reg"] == 0x2A:  # DAC Value
+        elif cmd.register == 0x2A:  # DAC Value
             if DEBUG:
                 print(
-                    f"YM2612: DAC value write: DA={self.dac_enable} DAC={cmd["val"]} ({bin(cmd['val'])})"
+                    f"YM2612: DAC value write: DA={self.dac_enable} DAC={cmd.value} ({bin(cmd.value)})"
                 )
             if not self.dac_enable:
                 warnings.warn(f"YM2612: DAC value write when DAC is not enabled")
-        elif 0x30 <= cmd["reg"] <= 0x3F:  # OP: Detune and multiplier
+        elif 0x30 <= cmd.register <= 0x3F:  # OP: Detune and multiplier
             channel, operator = get_channel_and_operator_number_from_reg(
-                cmd["port"], cmd["reg"]
+                cmd.port, cmd.register
             )
             if channel == -1:
-                # raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
-                return {"advance": advance, "notes": notes}
+                # raise YM2612Error(f"Unable to get channel number from register byte {cmd.register}")
+                return YM2612State()
             if DEBUG:
                 print(
-                    f"YM2612: Ch{channel+1} OP{operator+1} - Detune and Multiplier: Dtn={(cmd["val"] & 0b01110000) >> 4} Mul={cmd["val"] & 0xF}"
+                    f"YM2612: Ch{channel+1} OP{operator+1} - Detune and Multiplier: Dtn={(cmd.value & 0b01110000) >> 4} Mul={cmd.value & 0xF}"
                 )
             self.channels[channel].operators[operator].detune = (
-                cmd["val"] & 0b01110000
+                cmd.value & 0b01110000
             ) >> 4
-            self.channels[channel].operators[operator].multiplier = cmd["val"] & 0xF
-        elif 0x40 <= cmd["reg"] <= 0x4F:  # OP: Total level
+            self.channels[channel].operators[operator].multiplier = cmd.value & 0xF
+        elif 0x40 <= cmd.register <= 0x4F:  # OP: Total level
             channel, operator = get_channel_and_operator_number_from_reg(
-                cmd["port"], cmd["reg"]
+                cmd.port, cmd.register
             )
             if channel == -1:
-                # raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
-                return {"advance": advance, "notes": notes}
-            self.channels[channel].operators[operator].level = cmd["val"] & 0x7F
+                # raise YM2612Error(f"Unable to get channel number from register byte {cmd.register}")
+                return YM2612State()
+            self.channels[channel].operators[operator].level = cmd.value & 0x7F
             if DEBUG:
                 print(
-                    f"YM2612: Ch{channel+1} OP{operator+1} - Total level: TL={cmd["val"] & 0x40}"
+                    f"YM2612: Ch{channel+1} OP{operator+1} - Total level: TL={cmd.value & 0x40}"
                 )
-        elif 0x50 <= cmd["reg"] <= 0x5F:  # OP: Rate scaling and attack rate
+        elif 0x50 <= cmd.register <= 0x5F:  # OP: Rate scaling and attack rate
             channel, operator = get_channel_and_operator_number_from_reg(
-                cmd["port"], cmd["reg"]
+                cmd.port, cmd.register
             )
             if channel == -1:
-                # raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
-                return {"advance": advance, "notes": notes}
+                # raise YM2612Error(f"Unable to get channel number from register byte {cmd.register}")
+                return YM2612State()
             self.channels[channel].operators[operator].key_scaling = (
-                cmd["val"] & 0xC0
+                cmd.value & 0xC0
             ) >> 6
-            self.channels[channel].operators[operator].attack = cmd["val"] & 0x1F
+            self.channels[channel].operators[operator].attack = cmd.value & 0x1F
             if DEBUG:
                 print(
-                    f"YM2612: Ch{channel+1} OP{operator+1} - Rate scaling & attack: RS={(cmd["val"] & 0xC0) >> 6} A={cmd["val"] & 0x1F}"
+                    f"YM2612: Ch{channel+1} OP{operator+1} - Rate scaling & attack: RS={(cmd.value & 0xC0) >> 6} A={cmd.value & 0x1F}"
                 )
-        elif 0x60 <= cmd["reg"] <= 0x6F:  # OP: Decay 1 and AM
+        elif 0x60 <= cmd.register <= 0x6F:  # OP: Decay 1 and AM
             channel, operator = get_channel_and_operator_number_from_reg(
-                cmd["port"], cmd["reg"]
+                cmd.port, cmd.register
             )
             if channel == -1:
-                # raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
-                return {"advance": advance, "notes": notes}
+                # raise YM2612Error(f"Unable to get channel number from register byte {cmd.register}")
+                return YM2612State()
             self.channels[channel].operators[operator].amplitude_mod = (
-                cmd["val"] & 0x80 == 0x80
+                cmd.value & 0x80 == 0x80
             )
-            self.channels[channel].operators[operator].delay = cmd["val"] & 0x1F
+            self.channels[channel].operators[operator].delay = cmd.value & 0x1F
             if DEBUG:
                 print(
-                    f"YM2612: Ch{channel+1} OP{operator+1} - Delay & AM: AM={cmd["val"] & 0x80 == 0x80} D={cmd["val"] & 0x1F}"
+                    f"YM2612: Ch{channel+1} OP{operator+1} - Delay & AM: AM={cmd.value & 0x80 == 0x80} D={cmd.value & 0x1F}"
                 )
-        elif 0x70 <= cmd["reg"] <= 0x7F:  # OP: Sustain
+        elif 0x70 <= cmd.register <= 0x7F:  # OP: Sustain
             channel, operator = get_channel_and_operator_number_from_reg(
-                cmd["port"], cmd["reg"]
+                cmd.port, cmd.register
             )
             if channel == -1:
                 raise YM2612Error(
-                    f"Unable to get channel number from register byte {cmd["reg"]}"
+                    f"Unable to get channel number from register byte {cmd.register}"
                 )
-            self.channels[channel].operators[operator].sustain = cmd["val"] & 0x1F
+            self.channels[channel].operators[operator].sustain = cmd.value & 0x1F
             if DEBUG:
                 print(
-                    f"YM2612: Ch{channel+1} OP{operator+1} - Sustain: S={cmd["val"] & 0x1F}"
+                    f"YM2612: Ch{channel+1} OP{operator+1} - Sustain: S={cmd.value & 0x1F}"
                 )
-        elif 0x80 <= cmd["reg"] <= 0x8F:  # OP: Sustain level and release
+        elif 0x80 <= cmd.register <= 0x8F:  # OP: Sustain level and release
             channel, operator = get_channel_and_operator_number_from_reg(
-                cmd["port"], cmd["reg"]
+                cmd.port, cmd.register
             )
             if channel == -1:
-                # raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
-                return {"advance": advance, "notes": notes}
+                # raise YM2612Error(f"Unable to get channel number from register byte {cmd.register}")
+                return YM2612State()
             self.channels[channel].operators[operator].sust_lvl = (
-                (cmd["val"] & 0xF0) >> 4
+                (cmd.value & 0xF0) >> 4
             ) | 0x10
             self.channels[channel].operators[operator].release = (
-                cmd["val"] & 0xF
+                cmd.value & 0xF
             ) | 0x10
             if DEBUG:
                 print(
-                    f"YM2612: Ch{channel+1} OP{operator+1} - Sustain level & release: SL={((cmd["val"] & 0xF0) >> 4) | 0x10} R={(cmd["val"] & 0xF) | 0x10}"
+                    f"YM2612: Ch{channel+1} OP{operator+1} - Sustain level & release: SL={((cmd.value & 0xF0) >> 4) | 0x10} R={(cmd.value & 0xF) | 0x10}"
                 )
-        elif 0x90 <= cmd["reg"] <= 0x9F:  # OP: SSG Envelope Generation (SSG-EG)
+        elif 0x90 <= cmd.register <= 0x9F:  # OP: SSG Envelope Generation (SSG-EG)
             channel, operator = get_channel_and_operator_number_from_reg(
-                cmd["port"], cmd["reg"]
+                cmd.port, cmd.register
             )
             if channel == -1:
-                # raise YM2612Error(f"Unable to get channel number from register byte {cmd["reg"]}")
-                return {"advance": advance, "notes": notes}
-            self.channels[channel].operators[operator].ssg_eg = cmd["val"] & 0xF
+                # raise YM2612Error(f"Unable to get channel number from register byte {cmd.register}")
+                return YM2612State()
+            self.channels[channel].operators[operator].ssg_eg = cmd.value & 0xF
             if DEBUG:
                 print(
-                    f"YM2612: Ch{channel+1} OP{operator+1} - SSG-EG (envelope gen.): SSG-EG={cmd["val"] & 0xF} ({bin(cmd["val"] & 0xF)})"
+                    f"YM2612: Ch{channel+1} OP{operator+1} - SSG-EG (envelope gen.): SSG-EG={cmd.value & 0xF} ({bin(cmd.value & 0xF)})"
                 )
-        elif 0xA0 <= cmd["reg"] <= 0xAF:  # Ch: Frequency
-            if 0xA0 <= cmd["reg"] <= 0xA2:  # Ch1-3/4-6 frequency LSB
-                channel: int = cmd["reg"] - 0xA0 + (3 * cmd["port"])
+        elif 0xA0 <= cmd.register <= 0xAF:  # Ch: Frequency
+            if 0xA0 <= cmd.register <= 0xA2:  # Ch1-3/4-6 frequency LSB
+                channel: int = cmd.register - 0xA0 + (3 * cmd.port)
                 if DEBUG:
-                    print(f"YM2612: Ch{channel+1} - Frequency LSB: FL={cmd["val"]}")
+                    print(f"YM2612: Ch{channel+1} - Frequency LSB: FL={cmd.value}")
                 if (channel == 2 or channel == 5) and self.channels[2].ch3_special_mode:
                     self.channels[2].operators[0].ch3_spmode_freq = (
                         self.channels[2].operators[0].ch3_spmode_freq & 0xFF00
-                    ) | cmd["val"]
+                    ) | cmd.value
                 else:
                     self.channels[channel].frequency = (
                         self.channels[channel].frequency & 0xFF00
-                    ) | cmd["val"]
-            elif 0xA4 <= cmd["reg"] <= 0xA6:  # Ch1-3/4-6 frequency MSB and octave
-                channel: int = cmd["reg"] - 0xA4 + (3 * cmd["port"])
+                    ) | cmd.value
+            elif 0xA4 <= cmd.register <= 0xA6:  # Ch1-3/4-6 frequency MSB and octave
+                channel: int = cmd.register - 0xA4 + (3 * cmd.port)
                 if DEBUG:
                     print(
-                        f"YM2612: Ch{channel+1} - Frequency MSB & octave: FH={cmd["val"] & 0x07} O={(cmd["val"] >> 3) & 0x07}"
+                        f"YM2612: Ch{channel+1} - Frequency MSB & octave: FH={cmd.value & 0x07} O={(cmd.value >> 3) & 0x07}"
                     )
                 if (channel == 2 or channel == 5) and self.channels[2].ch3_special_mode:
                     self.channels[2].operators[0].ch3_spmode_freq = (
                         self.channels[2].operators[0].ch3_spmode_freq & 0xFF
-                    ) | (cmd["val"] & 0x07)
+                    ) | (cmd.value & 0x07)
                     self.channels[2].operators[0].ch3_spmode_octave = (
-                        cmd["val"] >> 3
+                        cmd.value >> 3
                     ) & 0x07
                 else:
                     self.channels[channel].frequency = (
                         self.channels[channel].frequency & 0xFF
-                    ) | cmd["val"] & 0x07
-                    self.channels[channel].octave = (cmd["val"] >> 3) & 0x07
-            elif 0xA8 <= cmd["reg"] <= 0xAA:  # Ch3(S) OP2-OP4 frequency LSB
+                    ) | cmd.value & 0x07
+                    self.channels[channel].octave = (cmd.value >> 3) & 0x07
+            elif 0xA8 <= cmd.register <= 0xAA:  # Ch3(S) OP2-OP4 frequency LSB
                 if self.channels[2].ch3_special_mode:
-                    operator: int = cmd["reg"] - 0xA7
+                    operator: int = cmd.register - 0xA7
                     if DEBUG:
                         print(
-                            f"YM2612: Ch2 special mode - OP{operator} frequency LSB: FL={cmd["val"]}"
+                            f"YM2612: Ch2 special mode - OP{operator} frequency LSB: FL={cmd.value}"
                         )
                     self.channels[2].operators[operator].ch3_spmode_freq = (
                         self.channels[2].operators[operator].ch3_spmode_freq & 0xFF00
-                    ) | cmd["val"]
+                    ) | cmd.value
                 else:
                     if DEBUG:
                         warnings.warn(
-                            f"YM2612: Write to channel 3 special mode frequency register while channel 3 special mode is off: R={cmd["reg"]} V={cmd["val"]} ({bin(cmd["val"])}"
+                            f"YM2612: Write to channel 3 special mode frequency register while channel 3 special mode is off: R={cmd.register} V={cmd.value} ({bin(cmd.value)}"
                         )
-            elif 0xAC <= cmd["reg"] <= 0xAE:  # Ch3(S) OP2-OP4 frequency MSB and octave
+            elif (
+                0xAC <= cmd.register <= 0xAE
+            ):  # Ch3(S) OP2-OP4 frequency MSB and octave
                 if self.channels[2].ch3_special_mode:
-                    operator: int = cmd["reg"] - 0xA7
+                    operator: int = cmd.register - 0xA7
                     if DEBUG:
                         print(
-                            f"YM2612: Ch2 special mode - OP{operator} frequency MSB & octave: FH={cmd["val"] & 0x07} O={(cmd["val"] >> 3) & 0x07}"
+                            f"YM2612: Ch2 special mode - OP{operator} frequency MSB & octave: FH={cmd.value & 0x07} O={(cmd.value >> 3) & 0x07}"
                         )
                     self.channels[2].operators[operator].ch3_spmode_freq = (
                         self.channels[2].operators[0].ch3_spmode_freq & 0xFF
-                    ) | (cmd["val"] & 0x07)
+                    ) | (cmd.value & 0x07)
                     self.channels[2].operators[operator].ch3_spmode_octave = (
-                        cmd["val"] >> 3
+                        cmd.value >> 3
                     ) & 0x07
                 else:
                     if DEBUG:
                         warnings.warn(
-                            f"YM2612: Write to channel 3 special mode frequency register while channel 3 special mode is off: R={cmd["reg"]} V={cmd["val"]} ({bin(cmd["val"])}"
+                            f"YM2612: Write to channel 3 special mode frequency register while channel 3 special mode is off: R={cmd.register} V={cmd.value} ({bin(cmd.value)}"
                         )
             else:
                 raise YM2612Error(
-                    f"Write to invalid frequency register: R={cmd["reg"]} V={cmd['val']} ({bin(cmd["val"])})"
+                    f"Write to invalid frequency register: R={cmd.register} V={cmd.value} ({bin(cmd.value)})"
                 )
-        elif 0xB0 <= cmd["reg"] <= 0xB3:  # Ch: Feedback and algorithm
-            channel: int = cmd["reg"] - 0xB0 + (3 * cmd["port"])
-            self.channels[channel].algorithm = cmd["val"] & 0x07
-            self.channels[channel].op1_feedback = (cmd["val"] >> 3) & 0x07
+        elif 0xB0 <= cmd.register <= 0xB3:  # Ch: Feedback and algorithm
+            channel: int = cmd.register - 0xB0 + (3 * cmd.port)
+            self.channels[channel].algorithm = cmd.value & 0x07
+            self.channels[channel].op1_feedback = (cmd.value >> 3) & 0x07
             if DEBUG:
                 print(
-                    f"YM2612: Ch{channel+1} - Feedback & algorithm: FB={(cmd["val"] >> 3) & 0x07} AL={cmd["val"] & 0x07}"
+                    f"YM2612: Ch{channel+1} - Feedback & algorithm: FB={(cmd.value >> 3) & 0x07} AL={cmd.value & 0x07}"
                 )
-        elif 0xB4 <= cmd["reg"] <= 0xB6:  # Ch: Stereo and LFO sensitivity
-            channel: int = cmd["reg"] - 0xB4 + (3 * cmd["port"])
-            self.channels[channel].pan = (cmd["val"] >> 6) & 0x03
-            self.channels[channel].ams = (cmd["val"] >> 3) & 0x07
-            self.channels[channel].fms = cmd["val"] & 0x02
+        elif 0xB4 <= cmd.register <= 0xB6:  # Ch: Stereo and LFO sensitivity
+            channel: int = cmd.register - 0xB4 + (3 * cmd.port)
+            self.channels[channel].pan = (cmd.value >> 6) & 0x03
+            self.channels[channel].ams = (cmd.value >> 3) & 0x07
+            self.channels[channel].fms = cmd.value & 0x02
             if DEBUG:
                 print(
-                    f"YM2612: Ch{channel+1} - Stereo & LFO: PN={(cmd["val"] >> 6) & 0x02} AMS={(cmd["val"] >> 3) & 0x07} FMS={cmd["val"] & 0x02}"
+                    f"YM2612: Ch{channel+1} - Stereo & LFO: PN={(cmd.value >> 6) & 0x02} AMS={(cmd.value >> 3) & 0x07} FMS={cmd.value & 0x02}"
                 )
         else:
             if DEBUG:
                 raise YM2612Error(
-                    f"(debug) Unknown register: P={cmd["port"]} R={cmd["reg"]} V={cmd["val"]} ({bin(cmd["val"])})"
+                    f"(debug) Unknown register: P={cmd.port} R={cmd.register} V={cmd.value} ({bin(cmd.value)})"
                 )
 
-        return {"advance": advance, "notes": notes}
+        return YM2612State(advance, notes=notes)
