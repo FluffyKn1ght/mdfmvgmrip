@@ -23,7 +23,7 @@ pip install -r requirements.txt
 py mdfmvgmrip.py --fm-inst-out FM SickTunez.vgm
 ```
 
-`vgm.py`, `segapsg.py` and `ym2612.py` are side modules that load and parse .VGM files as well as handle sound chip commands. They are *required* for the main script to work. (You *can* use them in your own projects, but they prob won't be of much help)
+`vgm.py`, `segapsg.py` and `ym2612.py` are side modules that load and parse .VGM files as well as handle sound chip commands. They are *required* for the main script to work. (You *can* use them in your own projects, but they probably won't be of much help)
 
 Other scripts include:
 - `dblkpad.py`: Pads the datablock data so that it can be imported as raw uncompressed 16-bit signed PCM data in an audio editor (like Audacity)
