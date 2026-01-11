@@ -167,12 +167,9 @@ class YM2612Instrument:
 
     @staticmethod
     def compare(a: YM2612Instrument, b: YM2612Instrument) -> bool:
-        ops_are_equal: bool = True
-
         for i in range(4):
             if not YM2612Operator.compare(a.operators[i], b.operators[i]):
-                ops_are_equal = False
-                break
+                return False
 
         return (
             a.algorithm == b.algorithm
@@ -181,7 +178,6 @@ class YM2612Instrument:
             and a.pan == b.pan
             and a.ams == b.ams
             and a.fms == b.fms
-            and ops_are_equal
         )
 
     @staticmethod
@@ -214,10 +210,22 @@ class YM2612Instrument:
         }
 
     def get_volume(self) -> int:
-        x: int = 0
-        for op in self.operators:
-            x += abs(127 - op.level)
-        return int(round(x / 4))
+        LOOKUP: dict[int, list[int]] = {
+            0: [3],
+            1: [3],
+            2: [3],
+            3: [3],
+            4: [1, 3],
+            5: [1, 2, 3],
+            6: [1, 2, 3],
+            7: [0, 1, 2, 3],
+        }
+
+        i = 0
+        for opidx in LOOKUP[self.algorithm]:
+            i += self.operators[opidx].level
+
+        return abs(127 - int(round(i / len(LOOKUP[self.algorithm]))))
 
 
 class YM2612State:
@@ -242,7 +250,6 @@ class YM2612:
         block: int = frequency & 0x0700
 
         freq_hz: float = (self.clock / 144.0) * (fn / (2 ** (19 - (block >> 3 + 8))))
-        print(freq_hz)
 
         return round(69 + 12 * math.log2(freq_hz / 440.0))
 

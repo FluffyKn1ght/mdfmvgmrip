@@ -127,6 +127,7 @@ def dump_midi_notes(vgm: VGM, out_file: str) -> None:
     instruments: list[YM2612Instrument] = []
     ym_note_events: list[dict[str, Any]] = []
     i: int = 0
+    a: int = 0
     for cmd in vgm.commands:
         if type(cmd) is WriteCommand:
             # TODO: Handle Chip.SEGA_PSG writes
@@ -139,15 +140,18 @@ def dump_midi_notes(vgm: VGM, out_file: str) -> None:
                             ym.channels[j], ym.lfo_freq
                         )
 
-                        k: int = -1
+                        idx: int = -1
+                        k: int = 0
                         for inst2 in instruments:
-                            k += 1
                             if YM2612Instrument.compare(cur_inst, inst2):
+                                idx = k
                                 break
+                            k += 1
 
-                        if k == -1:
+                        if idx == -1:
+                            a += 1
                             instruments.append(cur_inst)
-                            k = len(instruments) - 1
+                            idx = len(instruments) - 1
 
                         ym_note_events.append(
                             {
@@ -158,7 +162,7 @@ def dump_midi_notes(vgm: VGM, out_file: str) -> None:
                                 ),
                                 "at": i,
                                 "channel": j,
-                                "instrument": k,
+                                "instrument": idx,
                                 "frequency": ym.channels[j].frequency,
                             }
                         )
@@ -166,6 +170,8 @@ def dump_midi_notes(vgm: VGM, out_file: str) -> None:
                 i += ym_result.advance
         elif type(cmd) is WaitCommand:
             i += cmd.wait_time
+
+    print(f"Found {a} unique FM instruments")
 
     mid: mido.MidiFile = mido.MidiFile(ticks_per_beat=480)
     track: mido.MidiTrack = mido.MidiTrack()
@@ -176,6 +182,29 @@ def dump_midi_notes(vgm: VGM, out_file: str) -> None:
     ]
     last_event_time: int = 0
     for note in ym_note_events:
+        if (
+            note["type"] == "note_off"
+            and ym.frequency_to_midi_note(note["frequency"])
+            != channels[note["channel"]]["note"]
+        ):
+            continue
+
+        if channels[note["channel"]]["note"] != None and note["type"] == "note_on":
+            track.append(
+                mido.Message(
+                    "note_off",
+                    note=channels[note["channel"]]["note"],
+                    time=samples_to_ticks(note["at"]) - last_event_time,
+                    channel=note["channel"],
+                )
+            )
+            last_event_time = samples_to_ticks(note["at"])
+            channels[note["channel"]]["note"] = None
+            if DEBUG:
+                print(
+                    f"MIDI: YM2612 - Auto note_off {note["channel"]} {note["frequency"]}"
+                )
+
         track.append(
             mido.Message(
                 note["type"],
@@ -186,7 +215,32 @@ def dump_midi_notes(vgm: VGM, out_file: str) -> None:
             )
         )
         last_event_time = samples_to_ticks(note["at"])
+        if DEBUG:
+            print(
+                f"MIDI: YM2612 - {note["type"]} {note["channel"]} {note["frequency"]} {ym.frequency_to_midi_note(note["frequency"])} {note["instrument"]}"
+            )
 
+        if note["instrument"] != channels[note["channel"]]["instrument"]:
+            track.append(
+                mido.Message(
+                    "program_change",
+                    channel=note["channel"],
+                    program=note["instrument"],
+                    time=0,
+                )
+            )
+
+            if DEBUG:
+                print(
+                    f"MIDI: YM2612 - Program Change: {note["instrument"]} {note["channel"]}"
+                )
+
+        channels[note["channel"]]["note"] = (
+            ym.frequency_to_midi_note(note["frequency"])
+            if note["type"] == "note_on"
+            else None
+        )
+        channels[note["channel"]]["instrument"] = note["instrument"]
     try:
         mid.save(filename=out_file)
     except Exception as e:
