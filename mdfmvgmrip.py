@@ -15,8 +15,10 @@ import mido
 
 DEBUG: bool = "--debug" in sys.argv
 
-SAMPLE_RATE: int = 44100
-PPQN: int = 480
+
+def samples_to_ticks(samples: int) -> int:
+    ms: float = (samples / 44100.0) * 1000.0
+    return int(round(ms * 480 * 0.002))
 
 
 def dump_datablocks(data: dict, sections: list[DataBlockSection], out_dir: str) -> None:
@@ -149,10 +151,14 @@ def dump_midi_notes(vgm: VGM, out_file: str) -> None:
 
                         ym_note_events.append(
                             {
-                                "type": "down" if ym_result.notes[j] == "d" else "up",
+                                "type": (
+                                    "note_on"
+                                    if ym_result.notes[j] == "d"
+                                    else "note_off"
+                                ),
                                 "at": i,
                                 "channel": j,
-                                "instrutment": k,
+                                "instrument": k,
                                 "frequency": ym.channels[j].frequency,
                             }
                         )
@@ -161,8 +167,30 @@ def dump_midi_notes(vgm: VGM, out_file: str) -> None:
         elif type(cmd) is WaitCommand:
             i += cmd.wait_time
 
+    mid: mido.MidiFile = mido.MidiFile(ticks_per_beat=480)
+    track: mido.MidiTrack = mido.MidiTrack()
+    mid.tracks.append(track)
+
+    channels: list[dict[str, Any]] = [
+        {"note": None, "instrument": None} for _ in range(6)
+    ]
+    last_event_time: int = 0
     for note in ym_note_events:
-        pass
+        track.append(
+            mido.Message(
+                note["type"],
+                note=ym.frequency_to_midi_note(note["frequency"]),
+                velocity=instruments[note["instrument"]].get_volume(),
+                time=samples_to_ticks(note["at"]) - last_event_time,
+                channel=note["channel"],
+            )
+        )
+        last_event_time = samples_to_ticks(note["at"])
+
+    try:
+        mid.save(filename=out_file)
+    except Exception as e:
+        raise IOError(f"Error saving MIDI file: {e}")
 
 
 def main():

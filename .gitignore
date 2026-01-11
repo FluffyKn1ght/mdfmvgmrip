@@ -1,6 +1,9 @@
-centy/
-vgms/
-data/
-fm/
-midis/
-__pycache__/
+*
+!mdfmvgmrip.py
+!ym2612.py
+!vgm.py
+!dblkpad.py
+!sega_psg.py
+!README.md
+!LICENSE
+!.gitignore

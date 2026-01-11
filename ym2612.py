@@ -2,9 +2,13 @@ from typing import Any
 import sys
 import warnings
 import copy
+import math
+
 from vgm import WriteCommand
 
 DEBUG: bool = "--debug" in sys.argv
+
+A4_FREQUENCY: int = 440
 
 
 def get_channel_number_from_keyonoff_bits(chn: int) -> int:  # WHY, YAMAHA.
@@ -209,6 +213,12 @@ class YM2612Instrument:
             "metadata": self.metadata,
         }
 
+    def get_volume(self) -> int:
+        x: int = 0
+        for op in self.operators:
+            x += abs(127 - op.level)
+        return int(round(x / 4))
+
 
 class YM2612State:
     def __init__(self, advance: int = 1, *args, notes: list[str] | None = None) -> None:
@@ -227,7 +237,14 @@ class YM2612:
 
     def frequency_to_midi_note(self, frequency: int) -> int:
         # f_out = (f_clock / 144) * (FN / 2^(19 - BLOCK))
-        freq_hz: float = self.clock
+
+        fn: int = frequency & 0x07FF
+        block: int = frequency & 0x0700
+
+        freq_hz: float = (self.clock / 144.0) * (fn / (2 ** (19 - (block >> 3 + 8))))
+        print(freq_hz)
+
+        return round(69 + 12 * math.log2(freq_hz / 440.0))
 
     def handle_write_command(self, cmd: WriteCommand) -> YM2612State:
         advance: int = 1
