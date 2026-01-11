@@ -79,11 +79,19 @@ class VGM:
         self.dblock_data: dict[int, bytes] = {}
         self.dblock_sections: list[DataBlockSection] = []
 
-        self.sega_psg_clock: int = 0
-        self.ym2612_clock: int = 0
+        self._clock_rates: dict[Chip, int] = {}
+
+    def get_clock_rate(self, for_chip: Chip) -> int:
+        try:
+            return self._clock_rates[for_chip]
+        except KeyError:
+            return 0
 
     def is_a_genesis_vgm(self) -> bool:
-        return self.sega_psg_clock != 0 and self.ym2612_clock != 0
+        return (
+            self.get_clock_rate(Chip.SEGA_PSG) != 0
+            and self.get_clock_rate(Chip.YM2612) != 0
+        )
 
     @staticmethod
     def from_data(file_data: bytes) -> VGM:
@@ -98,14 +106,14 @@ class VGM:
         vgm.version = struct.unpack("<I", data.read(4))[0]
 
         data.seek(0x2C)
-        vgm.ym2612_clock = struct.unpack("<I", data.read(4))[0]
-        if vgm.ym2612_clock > 5000000:
+        vgm._clock_rates[Chip.YM2612] = struct.unpack("<I", data.read(4))[0]
+        if vgm._clock_rates[Chip.YM2612] > 5000000:
             if vgm.version <= 0x00000101:
                 data.seek(0x30)
-                vgm.ym2612_clock = struct.unpack("<I", data.read(4))[0]
+                vgm._clock_rates[Chip.YM2612] = struct.unpack("<I", data.read(4))[0]
 
         data.seek(0x28)
-        vgm.sega_psg_clock = struct.unpack("<I", data.read(4))[0]
+        vgm._clock_rates[Chip.SEGA_PSG] = struct.unpack("<I", data.read(4))[0]
 
         data_offset: int = 0x0C
         if vgm.version >= 0x00000150:

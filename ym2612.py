@@ -142,7 +142,6 @@ class YM2612Channel:
         self.operators: list[YM2612Operator] = [YM2612Operator() for _ in range(4)]
         self.ch3_special_mode: bool = False
         self.frequency: int = 0
-        self.octave: int = 0
         self.algorithm: int = 0
         self.op1_feedback: int = 0
         self.pan = 0
@@ -218,11 +217,17 @@ class YM2612State:
 
 
 class YM2612:
-    def __init__(self) -> None:
+    def __init__(self, clock: int) -> None:
+        self.clock: int = clock
+
         self.channels: list[YM2612Channel] = [YM2612Channel() for _ in range(6)]
         self.lfo_freq: int = -1  # -1 = disabled
         self.dac_enable: bool = False
         self.dac: int = 0
+
+    def frequency_to_midi_note(self, frequency: int) -> int:
+        # f_out = (f_clock / 144) * (FN / 2^(19 - BLOCK))
+        freq_hz: float = self.clock
 
     def handle_write_command(self, cmd: WriteCommand) -> YM2612State:
         advance: int = 1
@@ -417,8 +422,7 @@ class YM2612:
                 else:
                     self.channels[channel].frequency = (
                         self.channels[channel].frequency & 0xFF
-                    ) | cmd.value & 0x07
-                    self.channels[channel].octave = (cmd.value >> 3) & 0x07
+                    ) | (cmd.value & 0x3F) << 8
             elif 0xA8 <= cmd.register <= 0xAA:  # Ch3(S) OP2-OP4 frequency LSB
                 if self.channels[2].ch3_special_mode:
                     operator: int = cmd.register - 0xA7
